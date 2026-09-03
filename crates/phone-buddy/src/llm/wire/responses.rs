@@ -505,6 +505,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_failed_response_surfaces_the_server_error() {
+        let error = parse_responses_chunk(
+            "response.failed",
+            &serde_json::json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_failed",
+                    "status": "failed",
+                    "error": {
+                        "code": "orchestration_throttled",
+                        "message": "orchestration requests from this token are throttled"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect_err("response.failed must not be treated as an empty response");
+
+        assert!(matches!(
+            error,
+            EngineError::Llm(message)
+                if message.contains("orchestration_throttled")
+                    && message.contains("requests from this token are throttled")
+        ));
+    }
+
+    #[test]
     fn responses_payload_local_shell_and_custom_tool_serialization() {
         let r = req(vec![
             ConversationItem::Assistant(AssistantItem {
@@ -785,6 +812,22 @@ pub fn parse_responses_chunk(
 
     let type_str = event_name.to_lowercase();
     let json_type = v.get("type").and_then(|s| s.as_str()).unwrap_or("");
+
+    let is_failed = type_str.contains("response.failed") || json_type.contains("response.failed");
+    if is_failed {
+        let error = v.pointer("/response/error").or_else(|| v.get("error"));
+        let code = error
+            .and_then(|value| value.get("code"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("response_failed");
+        let message = error
+            .and_then(|value| value.get("message"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("the server failed to generate a response");
+        return Err(EngineError::Llm(format!(
+            "Responses API failed: {code}: {message}"
+        )));
+    }
 
     let is_completed = type_str.contains("response.completed")
         || json_type.contains("response.completed")
