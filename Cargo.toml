@@ -114,3 +114,8 @@ debug = "line-tables-only"
 [profile.dev]
 panic = "unwind"
 debug = "line-tables-only"
+split-debuginfo = "packed"
+
+[profile.test]
+debug = "line-tables-only"
+split-debuginfo = "packed"

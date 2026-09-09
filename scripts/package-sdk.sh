@@ -150,8 +150,8 @@ Welcome! This SDK package ships prebuilt multi-architecture binaries plus the Sw
 
 ## 📦 SDK Package Layout
 
-- **\`ios/\`**: iOS static libraries (\`.a\`), C header (\`phone_buddy.h\`), high-level Swift wrapper (\`PhoneBuddy.swift\`) and a SwiftUI example
-- **\`android/\`**: Android shared libraries (\`jniLibs/arm64-v8a\` & \`x86_64\`), Kotlin wrapper (\`NativeAgent.kt\`) and a Compose example
+- **\`ios/\`**: iOS static libraries (\`.a\` for arm64 device & Apple Silicon sim), C header (\`phone_buddy.h\`), high-level Swift wrapper (\`PhoneBuddy.swift\`) and a SwiftUI example
+- **\`android/\`**: Android shared libraries (\`jniLibs/arm64-v8a\`), Kotlin wrapper (\`NativeAgent.kt\`) and a Compose example
 - **\`c_api/\`**: Generic C-ABI interface and C/C++ integration examples
 - **\`docs/\`**: Detailed API manual and quick start guide (\`QUICKSTART.md\`)
 

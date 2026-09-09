@@ -22,12 +22,29 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 command -v cargo >/dev/null 2>&1 || { echo "cargo not found; please install Rust first" >&2; exit 1; }
 
-PROFILE="${1:-release}"
-case "$PROFILE" in
-  --profile) PROFILE="${2:-release}" ;;
-  release|ios-dist) ;;
-  *) echo "usage: $0 [release|ios-dist]"; exit 2 ;;
-esac
+PROFILE="release"
+BUILD_INTEL_SIM=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --profile)
+      PROFILE="$2"
+      shift 2
+      ;;
+    release|ios-dist)
+      PROFILE="$1"
+      shift
+      ;;
+    --all|--with-intel|--intel)
+      BUILD_INTEL_SIM=true
+      shift
+      ;;
+    *)
+      echo "usage: $0 [--profile release|ios-dist] [--all|--intel]"
+      exit 2
+      ;;
+  esac
+done
 
 OUT="$ROOT/dist/ios"
 mkdir -p "$OUT/include"
@@ -39,15 +56,21 @@ cp crates/phone-buddy-ffi/include/phone_buddy.h "$OUT/include/"
 echo "==> Building device target (aarch64-apple-ios)"
 cargo build -p phone-buddy-ffi --target aarch64-apple-ios --profile "$PROFILE"
 
-echo "==> Building simulator targets (aarch64-apple-ios-sim + x86_64-apple-ios)"
+echo "==> Building simulator target (aarch64-apple-ios-sim for Apple Silicon Mac)"
 cargo build -p phone-buddy-ffi --target aarch64-apple-ios-sim --profile "$PROFILE"
-cargo build -p phone-buddy-ffi --target x86_64-apple-ios --profile "$PROFILE"
 
 strip -S "target/aarch64-apple-ios/$PROFILE/libphone_buddy_ffi.a" -o "$OUT/libphone_buddy_ffi-device.a"
-lipo -create \
-  "target/aarch64-apple-ios-sim/$PROFILE/libphone_buddy_ffi.a" \
-  "target/x86_64-apple-ios/$PROFILE/libphone_buddy_ffi.a" \
-  -output "$OUT/libphone_buddy_ffi-sim.a"
+
+if [[ "$BUILD_INTEL_SIM" == true ]]; then
+  echo "==> Building legacy simulator target (x86_64-apple-ios)"
+  cargo build -p phone-buddy-ffi --target x86_64-apple-ios --profile "$PROFILE"
+  lipo -create \
+    "target/aarch64-apple-ios-sim/$PROFILE/libphone_buddy_ffi.a" \
+    "target/x86_64-apple-ios/$PROFILE/libphone_buddy_ffi.a" \
+    -output "$OUT/libphone_buddy_ffi-sim.a"
+else
+  cp "target/aarch64-apple-ios-sim/$PROFILE/libphone_buddy_ffi.a" "$OUT/libphone_buddy_ffi-sim.a"
+fi
 strip -S "$OUT/libphone_buddy_ffi-sim.a"
 
 echo ""

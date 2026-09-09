@@ -6,9 +6,8 @@
 # Requires: Android NDK (default lookup in $ANDROID_NDK_HOME,
 # $ANDROID_HOME/ndk/*, ~/Library/Android/sdk/ndk/*).
 #
-# Usage: ./scripts/build-android-sdk.sh [abi...]   # default: all ABIs
+# Usage: ./scripts/build-android-sdk.sh [abi... | --all]   # default: arm64-v8a
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
@@ -46,9 +45,14 @@ echo "==> Using NDK: $NDK"
 
 declare -a ABIS
 if [[ $# -gt 0 ]]; then
-  ABIS=("$@")
+  if [[ "$1" == "--all" ]]; then
+    ABIS=(arm64-v8a x86_64 armeabi-v7a x86)
+  else
+    ABIS=("$@")
+  fi
 else
-  ABIS=(arm64-v8a x86_64 armeabi-v7a x86)
+  # Default to arm64-v8a (modern physical Android devices)
+  ABIS=(arm64-v8a)
 fi
 
 OUT="$ROOT/dist/android/jniLibs"

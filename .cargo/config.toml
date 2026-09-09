@@ -1,4 +1,5 @@
 [build]
+rustc-wrapper = "sccache"
 # No default target: host development uses aarch64-apple-darwin.
 # iOS/Android builds pass --target explicitly via scripts/build-ios-sdk.sh / scripts/build-android-sdk.sh.
 
