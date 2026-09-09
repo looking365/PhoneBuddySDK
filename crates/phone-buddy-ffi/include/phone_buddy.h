@@ -162,6 +162,15 @@ char *pb_runtime_generate_text_async(struct PbRuntime *runtime,
 void pb_runtime_cancel_operation(struct PbRuntime *runtime, const char *operation_id);
 
 /**
+ * Cancel outstanding one-shot operations without freeing the shared runtime.
+ * Routing and provider health remain available for subsequent operations.
+ *
+ * # Safety
+ * `runtime` must be a live handle returned by [`pb_runtime_new`], or null.
+ */
+void pb_runtime_cancel_all(struct PbRuntime *runtime);
+
+/**
  * Free a runtime handle. Outstanding one-shot operations are cancelled.
  *
  * # Safety

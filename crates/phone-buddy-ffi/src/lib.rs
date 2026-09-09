@@ -574,6 +574,20 @@ pub unsafe extern "C" fn pb_runtime_cancel_operation(
     });
 }
 
+/// Cancel outstanding one-shot operations without freeing the shared runtime.
+/// Routing and provider health remain available for subsequent operations.
+///
+/// # Safety
+/// `runtime` must be a live handle returned by [`pb_runtime_new`], or null.
+#[no_mangle]
+pub unsafe extern "C" fn pb_runtime_cancel_all(runtime: *mut PbRuntime) {
+    catch_void(|| {
+        if let Some(runtime) = runtime.as_ref() {
+            runtime.inner.cancel_all();
+        }
+    });
+}
+
 /// Free a runtime handle. Outstanding one-shot operations are cancelled.
 ///
 /// # Safety
@@ -1991,6 +2005,43 @@ mod tests {
                 "unexpected kind {kind} envelope={envelope}"
             );
             pb_string_free(op);
+            pb_runtime_free(runtime);
+        }
+    }
+
+    #[test]
+    fn test_pb_runtime_cancel_all_preserves_runtime() {
+        let dir = tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let routing = title_routing_json(&format!("http://{}/v1", listener.local_addr().unwrap()));
+        unsafe {
+            pb_runtime_cancel_all(std::ptr::null_mut());
+            let routing_c = CString::new(routing).unwrap();
+            let root_c = CString::new(dir.path().to_string_lossy().as_ref()).unwrap();
+            let mut err: *mut c_char = std::ptr::null_mut();
+            let runtime = pb_runtime_new(routing_c.as_ptr(), root_c.as_ptr(), &mut err);
+            assert!(!runtime.is_null());
+            let (tx, rx) = std::sync::mpsc::channel::<String>();
+            let req = CString::new(r#"{"pool_id":"session_title","input":"title me"}"#).unwrap();
+            for _ in 0..2 {
+                let op = pb_runtime_generate_text_async(
+                    runtime,
+                    req.as_ptr(),
+                    Some(generate_done_cb),
+                    &tx as *const _ as *mut c_void,
+                    &mut err,
+                );
+                assert!(!op.is_null());
+                pb_string_free(op);
+            }
+            pb_runtime_cancel_all(runtime);
+            for _ in 0..2 {
+                let envelope = rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+                let value: serde_json::Value = serde_json::from_str(&envelope).unwrap();
+                assert_eq!(value["error"]["kind"], "OperationCancelled");
+            }
+            assert_eq!(pb_runtime_update_routing(runtime, routing_c.as_ptr(), &mut err), 0);
+            assert!(err.is_null());
             pb_runtime_free(runtime);
         }
     }

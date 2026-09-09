@@ -1343,7 +1343,26 @@ fn failure_class_of(err: &EngineError) -> FailureClass {
 
 fn is_veto(err: &EngineError) -> bool {
     match err {
-        EngineError::Llm(msg) => is_retry_vetoed_message(msg),
+        EngineError::Llm(msg) => {
+            if is_retry_vetoed_message(msg) {
+                return true;
+            }
+            // A gateway account's quota is independent of provider health.
+            // Parse the error code, rather than matching words in its message.
+            if status_from_error(err) != Some(403) {
+                return false;
+            }
+            let Some(start) = msg.find('{') else {
+                return false;
+            };
+            let mut values =
+                serde_json::Deserializer::from_str(&msg[start..]).into_iter::<serde_json::Value>();
+            values.next().and_then(Result::ok).is_some_and(|body| {
+                body.pointer("/error/code")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("insufficient_user_quota")
+            })
+        }
         _ => false,
     }
 }
@@ -1937,6 +1956,49 @@ mod tests {
             .snapshot()
             .iter()
             .any(|e| matches!(e, AgentEvent::ProviderSwitched { .. })));
+    }
+
+    #[tokio::test]
+    async fn account_quota_never_cools_a_provider_and_recharge_recovers_immediately() {
+        let hits = Arc::new(AtomicU32::new(0));
+        let transport = ScriptedTransport::failing(
+            "new-api",
+            1,
+            r#"status=403 {"error":{"code":"insufficient_user_quota","message":"quota exhausted"}} [HTTP dump: /redacted]"#,
+            hits.clone(),
+        );
+        let client = LlmClient::with_chain(
+            vec![("new-api-main".into(), "grok-4.6".into(), transport)],
+            5,
+            3,
+            120,
+        );
+        let observer = RecordingObserver::new();
+        let error = client.complete(&req(), &observer).await.unwrap_err();
+        assert!(error.to_string().contains("insufficient_user_quota"));
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let health = client.router().health_record("new-api-main");
+        assert!(health
+            .as_ref()
+            .is_none_or(|record| record.consecutive_trips == 0 && record.cooldown_until.is_none()));
+        let result = client.complete(&req(), &observer).await.unwrap();
+        assert_eq!(result.text, "ok");
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        assert!(!observer
+            .snapshot()
+            .iter()
+            .any(|event| matches!(event, AgentEvent::ProviderSwitched { .. })));
+    }
+
+    #[test]
+    fn quota_veto_requires_the_exact_error_code_and_status() {
+        for message in [
+            r#"status=403 {"error":{"code":"upstream_error","message":"insufficient_user_quota"}}"#,
+            r#"status=503 {"error":{"code":"insufficient_user_quota"}}"#,
+            "status=403 insufficient_user_quota",
+        ] {
+            assert!(!is_veto(&EngineError::Llm(message.into())), "{message}");
+        }
     }
 
     #[tokio::test]
