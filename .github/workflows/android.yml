@@ -2,7 +2,7 @@ name: Android APK Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, apk_builder]
     paths:
       - 'crates/**'
       - 'Cargo.toml'
@@ -22,6 +22,25 @@ on:
       - 'examples/android/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+      version_name:
+        description: 'Version name (e.g. 1.2.3). Leave empty to use Gradle default.'
+        required: false
+        default: ''
+        type: string
+      version_code:
+        description: 'Version code (integer, e.g. 10203). Leave empty to use Gradle default.'
+        required: false
+        default: ''
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -36,7 +55,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -46,7 +65,7 @@ jobs:
           components: rustfmt,clippy
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -57,7 +76,7 @@ jobs:
             android-rust-${{ runner.os }}-
 
       - name: Set up Android SDK and NDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }}"
 
@@ -73,6 +92,14 @@ jobs:
           echo "ndk_path=$NDK_PATH" >> "$GITHUB_OUTPUT"
           echo "Using NDK: $NDK_PATH"
 
+      - name: Debug - Check Cargo.lock status
+        run: |
+          echo "=== Cargo.lock status ==="
+          cargo check --workspace --locked 2>&1 | head -50 || true
+          echo "=== Rust version ==="
+          rustc --version
+          cargo --version
+
       - name: Run cargo check
         run: cargo check --workspace
 
@@ -82,7 +109,7 @@ jobs:
         run: ./scripts/build-android-sdk.sh arm64-v8a x86_64
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -95,11 +122,38 @@ jobs:
           echo "Copied native libraries:"
           find examples/android/app/src/main/jniLibs -name "*.so" -exec ls -lh {} \;
 
-      - name: Build Debug APK with Gradle
+      - name: Resolve build parameters
+        id: params
+        run: |
+          BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          if [ -z "$BUILD_TYPE" ]; then
+            BUILD_TYPE="debug"
+          fi
+          echo "build_type=$BUILD_TYPE" >> "$GITHUB_OUTPUT"
+
+          VERSION_NAME="${{ github.event.inputs.version_name }}"
+          VERSION_CODE="${{ github.event.inputs.version_code }}"
+
+          GRADLE_ARGS=""
+          if [ -n "$VERSION_NAME" ]; then
+            GRADLE_ARGS="$GRADLE_ARGS -PversionNameOverride=$VERSION_NAME"
+          fi
+          if [ -n "$VERSION_CODE" ]; then
+            GRADLE_ARGS="$GRADLE_ARGS -PversionCodeOverride=$VERSION_CODE"
+          fi
+          echo "gradle_args=$GRADLE_ARGS" >> "$GITHUB_OUTPUT"
+          echo "Build type: $BUILD_TYPE"
+          echo "Gradle args: $GRADLE_ARGS"
+
+      - name: Build APK with Gradle
         working-directory: examples/android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          if [ "${{ steps.params.outputs.build_type }}" = "release" ]; then
+            ./gradlew assembleRelease ${{ steps.params.outputs.gradle_args }} --no-daemon
+          else
+            ./gradlew assembleDebug ${{ steps.params.outputs.gradle_args }} --no-daemon
+          fi
 
       - name: Locate APK output
         id: apk
@@ -116,9 +170,9 @@ jobs:
           echo "APK built: $APK_PATH ($APK_SIZE)"
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: phonebuddy-android-${{ github.sha }}
+          name: phonebuddy-android-${{ steps.params.outputs.build_type }}-${{ github.sha }}
           path: ${{ steps.apk.outputs.apk_path }}
           retention-days: 30
           if-no-files-found: error
