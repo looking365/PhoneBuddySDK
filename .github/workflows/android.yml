@@ -64,13 +64,20 @@ jobs:
           targets: aarch64-linux-android,x86_64-linux-android
           components: rustfmt,clippy
 
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Setup sccache environment
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+
       - name: Cache Rust dependencies
         uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
           key: android-rust-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             android-rust-${{ runner.os }}-
