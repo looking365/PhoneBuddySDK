@@ -1,0 +1,124 @@
+name: Android APK Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'scripts/build-android-sdk.sh'
+      - 'examples/android/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'scripts/build-android-sdk.sh'
+      - 'examples/android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  ANDROID_NDK_VERSION: "27.0.12077973"
+  RUST_TOOLCHAIN: "1.94.0"
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: aarch64-linux-android,x86_64-linux-android
+          components: rustfmt,clippy
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: android-rust-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            android-rust-${{ runner.os }}-
+
+      - name: Set up Android SDK and NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }}"
+
+      - name: Locate NDK path
+        id: ndk
+        run: |
+          NDK_PATH="$ANDROID_HOME/ndk/${{ env.ANDROID_NDK_VERSION }}"
+          if [ ! -d "$NDK_PATH" ]; then
+            echo "NDK not found at $NDK_PATH"
+            ls -la "$ANDROID_HOME/ndk/" || true
+            exit 1
+          fi
+          echo "ndk_path=$NDK_PATH" >> "$GITHUB_OUTPUT"
+          echo "Using NDK: $NDK_PATH"
+
+      - name: Run cargo check
+        run: cargo check --workspace
+
+      - name: Cross-compile Rust FFI library (arm64-v8a & x86_64)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk_path }}
+        run: ./scripts/build-android-sdk.sh arm64-v8a x86_64
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Copy .so into Gradle jniLibs
+        run: |
+          mkdir -p examples/android/app/src/main/jniLibs
+          cp -r dist/android/jniLibs/* examples/android/app/src/main/jniLibs/
+          echo "sdk.dir=$ANDROID_HOME" > examples/android/local.properties
+          echo "Copied native libraries:"
+          find examples/android/app/src/main/jniLibs -name "*.so" -exec ls -lh {} \;
+
+      - name: Build Debug APK with Gradle
+        working-directory: examples/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Locate APK output
+        id: apk
+        run: |
+          APK_PATH=$(find examples/android/app/build/outputs/apk -name "*.apk" | head -1)
+          if [ -z "$APK_PATH" ]; then
+            echo "APK not found!"
+            find examples/android/app/build/outputs -type f || true
+            exit 1
+          fi
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+          echo "apk_name=$(basename "$APK_PATH")" >> "$GITHUB_OUTPUT"
+          APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+          echo "APK built: $APK_PATH ($APK_SIZE)"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonebuddy-android-${{ github.sha }}
+          path: ${{ steps.apk.outputs.apk_path }}
+          retention-days: 30
+          if-no-files-found: error
